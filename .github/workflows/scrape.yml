@@ -28,7 +28,7 @@ jobs:
           import datetime
           import re
 
-          regions = ["hokkaido", "tohoku", "tokyo", "chubu", "hokuriku", "kansai", "chugoku", "shikoku", "kyushu"]
+          regions = ["hokkaido", "tohoku", "tokyo", "chubu", "hokuriku", "kansai", "chugoku", "shikoku", "kyushu"] 
           all_data = []
 
           for r in regions:
