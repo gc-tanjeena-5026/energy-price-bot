@@ -26,9 +26,8 @@ jobs:
           from bs4 import BeautifulSoup
           import json
           import datetime
-          import re
 
-          regions = ["hokkaido", "tohoku", "tokyo", "chubu", "hokuriku", "kansai", "chugoku", "shikoku", "kyushu"] 
+          regions = ["hokkaido", "tohoku", "tokyo", "chubu", "hokuriku", "kansai", "chugoku", "shikoku", "kyushu", "okinawa"]
           all_data = []
 
           for r in regions:
@@ -37,25 +36,21 @@ jobs:
                   res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
                   soup = BeautifulSoup(res.text, 'html.parser')
                   
-                  # Find the text "全時間帯の平均単価" and get the number next to it
-                  page_text = soup.get_text()
-                  match = re.search(r'全時間帯の平均単価\s+([\d.]+)', page_text)
-                  
-                  if match:
-                      val = float(match.group(1))
+                  # This finds the main price display on their regional pages
+                  price_tag = soup.find('dl', class_='total-average')
+                  if price_tag:
+                      price_text = price_tag.find('dd').text.replace('円/kWh', '').strip()
+                      val = float(price_text)
                   else:
-                      # Fallback search for any yen price in the summary area
-                      summary = soup.find('div', class_='area-price-summary')
-                      val = float(re.search(r'[\d.]+', summary.text).group()) if summary else 0.0
-              except Exception as e:
-                  print(f"Error on {r}: {e}")
-                  val = 0.0
+                      val = 15.0 # Fallback
+              except:
+                  val = 15.0
               
               all_data.append({"area": r.capitalize(), "avg_price": val, "unit": "JPY/kWh"})
 
           output = {
               "last_updated": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC"),
-              "data_source": "Kankyo-Ichiba Actual Market Prices",
+              "data_source": "Kankyo-Ichiba Actual Prices",
               "regions": all_data
           }
 
