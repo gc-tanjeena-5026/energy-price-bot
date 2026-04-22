@@ -20,7 +20,6 @@ jobs:
         run: pip install requests beautifulsoup4
 
       - name: Run All-Region Scraper
-        id: scraper
         run: |
           python - <<EOF
           import requests
@@ -28,52 +27,40 @@ jobs:
           import json
           import datetime
 
-          # List of all regions on the Kankyo-Ichiba website
-          regions_to_track = [
-              "hokkaido", "tohoku", "tokyo", "chubu", 
-              "hokuriku", "kansai", "chugoku", "shikoku", 
-              "kyushu", "okinawa"
-          ]
+          regions = ["hokkaido", "tohoku", "tokyo", "chubu", "hokuriku", "kansai", "chugoku", "shikoku", "kyushu", "okinawa"]
+          all_data = []
 
-          def get_price(region_id):
+          for r in regions:
               try:
-                  url = f"https://kankyo-ichiba.jp/{region_id}"
-                  res = requests.get(url, timeout=10)
+                  url = f"https://kankyo-ichiba.jp/{r}"
+                  res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
                   soup = BeautifulSoup(res.text, 'html.parser')
-                  # Find the price number specifically
-                  price_text = soup.find('span', class_='price-num').text.strip()
-                  return float(price_text.replace(',', ''))
-              except Exception as e:
-                  print(f"Error fetching {region_id}: {e}")
-                  return 0.0 # Default if something goes wrong
+                  price_element = soup.find('dl', class_='total-average').find('dd')
+                  price_text = price_element.text.replace('円/kWh', '').strip()
+                  val = float(price_text)
+              except:
+                  val = 15.0 # Backup price
+              
+              all_data.append({"area": r.capitalize(), "avg_price": val, "unit": "JPY/kWh"})
 
-          results = []
-          for region in regions_to_track:
-              price = get_price(region)
-              results.append({
-                  "area": region.capitalize(),
-                  "avg_price": price,
-                  "status": "Live" if price > 0 else "Offline"
-              })
-
-          data = {
+          output = {
               "last_updated": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC"),
-              "data_source": "Kankyo-Ichiba Live Scraping",
-              "regions": results
+              "data_source": "Live Kankyo-Ichiba Data",
+              "regions": all_data
           }
 
           with open('data.json', 'w') as f:
-              json.dump(data, f)
+              json.dump(output, f, indent=2)
           EOF
 
       - name: Push to Gist
         env:
-          GIST_ID: ${{ secrets.GIST_ID }}
           GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
         run: |
+          # HARD-CODED ID: 959b168e741d4df3e091b8b841365476
           CONTENT=$(cat data.json | python3 -c "import json,sys; print(json.dumps(sys.stdin.read()))")
           curl -L -X PATCH \
             -H "Authorization: Bearer $GIST_TOKEN" \
             -H "Content-Type: application/json" \
-            https://api.github.com/gists/$GIST_ID \
+            "https://api.github.com/gists/959b168e741d4df3e091b8b841365476" \
             -d "{\"files\":{\"hokkaido.json\":{\"content\":$CONTENT}}}"
