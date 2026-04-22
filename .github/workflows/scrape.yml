@@ -1,28 +1,69 @@
-name: Auto Energy Scraper
+name: Live All-Japan Energy Scraper
 on:
   schedule:
-    - cron: "0 * * * *" # Runs every hour automatically
-  workflow_dispatch: # This adds the "Run" button for testing
+    - cron: "0 * * * *" 
+  workflow_dispatch: 
 
 jobs:
-  update-gist:
+  scrape-and-update:
     runs-on: ubuntu-latest
     steps:
-      - name: Generate JSON Data
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Scraper Tools
+        run: pip install requests beautifulsoup4
+
+      - name: Run All-Region Scraper
+        id: scraper
         run: |
-          TIMESTAMP=$(date -u +'%Y-%m-%d %H:%M:%S UTC')
-          cat <<EOF > hokkaido.json
-          {
-            "last_updated": "$TIMESTAMP",
-            "regions": [
-              { "area": "Hokkaido", "avg_price": 14.96, "weather": "Sunny" },
-              { "area": "Tohoku", "avg_price": 15.10, "weather": "Cloudy" },
-              { "area": "Tokyo", "avg_price": 21.06, "weather": "Clear" },
-              { "area": "Chubu", "avg_price": 16.45, "weather": "Rainy" },
-              { "area": "Kansai", "avg_price": 15.02, "weather": "Cloudy" },
-              { "area": "Kyushu", "avg_price": 10.15, "weather": "Sunny" }
-            ]
+          python - <<EOF
+          import requests
+          from bs4 import BeautifulSoup
+          import json
+          import datetime
+
+          # List of all regions on the Kankyo-Ichiba website
+          regions_to_track = [
+              "hokkaido", "tohoku", "tokyo", "chubu", 
+              "hokuriku", "kansai", "chugoku", "shikoku", 
+              "kyushu", "okinawa"
+          ]
+
+          def get_price(region_id):
+              try:
+                  url = f"https://kankyo-ichiba.jp/{region_id}"
+                  res = requests.get(url, timeout=10)
+                  soup = BeautifulSoup(res.text, 'html.parser')
+                  # Find the price number specifically
+                  price_text = soup.find('span', class_='price-num').text.strip()
+                  return float(price_text.replace(',', ''))
+              except Exception as e:
+                  print(f"Error fetching {region_id}: {e}")
+                  return 0.0 # Default if something goes wrong
+
+          results = []
+          for region in regions_to_track:
+              price = get_price(region)
+              results.append({
+                  "area": region.capitalize(),
+                  "avg_price": price,
+                  "status": "Live" if price > 0 else "Offline"
+              })
+
+          data = {
+              "last_updated": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC"),
+              "data_source": "Kankyo-Ichiba Live Scraping",
+              "regions": results
           }
+
+          with open('data.json', 'w') as f:
+              json.dump(data, f)
           EOF
 
       - name: Push to Gist
@@ -30,8 +71,7 @@ jobs:
           GIST_ID: ${{ secrets.GIST_ID }}
           GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
         run: |
-          # Safe formatting using Python
-          CONTENT=$(cat hokkaido.json | python3 -c "import json,sys; print(json.dumps(sys.stdin.read()))")
+          CONTENT=$(cat data.json | python3 -c "import json,sys; print(json.dumps(sys.stdin.read()))")
           curl -L -X PATCH \
             -H "Authorization: Bearer $GIST_TOKEN" \
             -H "Content-Type: application/json" \
