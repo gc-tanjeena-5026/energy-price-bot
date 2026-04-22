@@ -26,8 +26,9 @@ jobs:
           from bs4 import BeautifulSoup
           import json
           import datetime
+          import re
 
-          regions = ["hokkaido", "tohoku", "tokyo", "chubu", "hokuriku", "kansai", "chugoku", "shikoku", "kyushu", "okinawa"]
+          regions = ["hokkaido", "tohoku", "tokyo", "chubu", "hokuriku", "kansai", "chugoku", "shikoku", "kyushu"]
           all_data = []
 
           for r in regions:
@@ -35,17 +36,26 @@ jobs:
                   url = f"https://kankyo-ichiba.jp/{r}"
                   res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
                   soup = BeautifulSoup(res.text, 'html.parser')
-                  price_element = soup.find('dl', class_='total-average').find('dd')
-                  price_text = price_element.text.replace('円/kWh', '').strip()
-                  val = float(price_text)
-              except:
-                  val = 15.0 # Backup price
+                  
+                  # Find the text "全時間帯の平均単価" and get the number next to it
+                  page_text = soup.get_text()
+                  match = re.search(r'全時間帯の平均単価\s+([\d.]+)', page_text)
+                  
+                  if match:
+                      val = float(match.group(1))
+                  else:
+                      # Fallback search for any yen price in the summary area
+                      summary = soup.find('div', class_='area-price-summary')
+                      val = float(re.search(r'[\d.]+', summary.text).group()) if summary else 0.0
+              except Exception as e:
+                  print(f"Error on {r}: {e}")
+                  val = 0.0
               
               all_data.append({"area": r.capitalize(), "avg_price": val, "unit": "JPY/kWh"})
 
           output = {
               "last_updated": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC"),
-              "data_source": "Live Kankyo-Ichiba Data",
+              "data_source": "Kankyo-Ichiba Actual Market Prices",
               "regions": all_data
           }
 
@@ -57,7 +67,6 @@ jobs:
         env:
           GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
         run: |
-          # HARD-CODED ID: 959b168e741d4df3e091b8b841365476
           CONTENT=$(cat data.json | python3 -c "import json,sys; print(json.dumps(sys.stdin.read()))")
           curl -L -X PATCH \
             -H "Authorization: Bearer $GIST_TOKEN" \
