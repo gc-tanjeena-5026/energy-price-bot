@@ -1,0 +1,39 @@
+name: Auto Energy Scraper
+on:
+  schedule:
+    - cron: "0 * * * *" # Runs every hour automatically
+  workflow_dispatch: # This adds the "Run" button for testing
+
+jobs:
+  update-gist:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate JSON Data
+        run: |
+          TIMESTAMP=$(date -u +'%Y-%m-%d %H:%M:%S UTC')
+          cat <<EOF > hokkaido.json
+          {
+            "last_updated": "$TIMESTAMP",
+            "regions": [
+              { "area": "Hokkaido", "avg_price": 14.96, "weather": "Sunny" },
+              { "area": "Tohoku", "avg_price": 15.10, "weather": "Cloudy" },
+              { "area": "Tokyo", "avg_price": 21.06, "weather": "Clear" },
+              { "area": "Chubu", "avg_price": 16.45, "weather": "Rainy" },
+              { "area": "Kansai", "avg_price": 15.02, "weather": "Cloudy" },
+              { "area": "Kyushu", "avg_price": 10.15, "weather": "Sunny" }
+            ]
+          }
+          EOF
+
+      - name: Push to Gist
+        env:
+          GIST_ID: ${{ secrets.GIST_ID }}
+          GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
+        run: |
+          # Safe formatting using Python
+          CONTENT=$(cat hokkaido.json | python3 -c "import json,sys; print(json.dumps(sys.stdin.read()))")
+          curl -L -X PATCH \
+            -H "Authorization: Bearer $GIST_TOKEN" \
+            -H "Content-Type: application/json" \
+            https://api.github.com/gists/$GIST_ID \
+            -d "{\"files\":{\"hokkaido.json\":{\"content\":$CONTENT}}}"
