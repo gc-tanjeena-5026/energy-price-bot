@@ -1,4 +1,4 @@
-name: Live All-Japan Energy Scraper
+name: Live Hourly Energy Scraper
 on:
   schedule:
     - cron: "0 * * * *" 
@@ -19,7 +19,7 @@ jobs:
       - name: Install Scraper Tools
         run: pip install requests beautifulsoup4
 
-      - name: Run All-Region Scraper
+      - name: Run Hourly Scraper
         run: |
           python - <<EOF
           import requests
@@ -27,7 +27,7 @@ jobs:
           import json
           import datetime
 
-          regions = ["hokkaido", "tohoku", "tokyo", "chubu", "hokuriku", "kansai", "chugoku", "shikoku", "kyushu", "okinawa"]
+          regions = ["hokkaido", "tohoku", "tokyo", "chubu", "hokuriku", "kansai", "chugoku", "shikoku", "kyushu"]
           all_data = []
 
           for r in regions:
@@ -36,21 +36,32 @@ jobs:
                   res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
                   soup = BeautifulSoup(res.text, 'html.parser')
                   
-                  # This finds the main price display on their regional pages
-                  price_tag = soup.find('dl', class_='total-average')
-                  if price_tag:
-                      price_text = price_tag.find('dd').text.replace('円/kWh', '').strip()
-                      val = float(price_text)
-                  else:
-                      val = 15.0 # Fallback
-              except:
-                  val = 15.0
-              
-              all_data.append({"area": r.capitalize(), "avg_price": val, "unit": "JPY/kWh"})
+                  # 1. Get the Daily Average (Solving the 15.0 issue)
+                  avg_tag = soup.find('dl', class_='total-average')
+                  avg_val = float(avg_tag.find('dd').text.replace('円/kWh', '').strip()) if avg_tag else 0.0
 
+                  # 2. Get the Hourly Table
+                  hourly_prices = []
+                  table = soup.find('table', class_='area-price-table')
+                  if table:
+                      rows = table.find_all('tr')[1:] # Skip header
+                      for row in rows:
+                          cols = row.find_all('td')
+                          if len(cols) >= 2:
+                              time_range = cols[0].text.strip()
+                              price = float(cols[1].text.replace('円', '').strip())
+                              hourly_prices.append({"time": time_range, "price": price})
+                  
+                  all_data.append({
+                      "area": r.capitalize(),
+                      "daily_avg": avg_val,
+                      "hourly_data": hourly_prices
+                  })
+              except Exception as e:
+                  print(f"Error on {r}: {e}")
+              
           output = {
               "last_updated": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC"),
-              "data_source": "Kankyo-Ichiba Actual Prices",
               "regions": all_data
           }
 
