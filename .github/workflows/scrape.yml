@@ -16,6 +16,9 @@ jobs:
         with:
           python-version: '3.10'
 
+      - name: Install Dependencies
+        run: pip install requests
+
       - name: Run API-Direct Scraper
         run: |
           python - <<EOF
@@ -23,8 +26,6 @@ jobs:
           import json
           import datetime
 
-          # Mapping regional IDs used by the website's internal data source
-          # 1: Hokkaido, 2: Tohoku, 3: Tokyo, 4: Chubu, 5: Hokuriku, 6: Kansai, 7: Chugoku, 8: Shikoku, 9: Kyushu
           region_map = {
               "1": "Hokkaido", "2": "Tohoku", "3": "Tokyo", "4": "Chubu", 
               "5": "Hokuriku", "6": "Kansai", "7": "Chugoku", "8": "Shikoku", "9": "Kyushu"
@@ -36,35 +37,22 @@ jobs:
 
           for r_id, r_name in region_map.items():
               try:
-                  # Targeting the internal data endpoint directly
                   api_url = f"https://kankyo-ichiba.jp/api/get-area-price?area={r_id}&date={date_str}"
                   res = requests.get(api_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
-                  data = res.json()
-                  
-                  if data and 'prices' in data:
-                      hourly_list = []
-                      for entry in data['prices']:
-                          hourly_list.append({
-                              "time": entry.get('time'),
-                              "price": float(entry.get('price', 0))
+                  if res.status_code == 200:
+                      data = res.json()
+                      if data and 'prices' in data:
+                          hourly_list = [{"time": e.get('time'), "price": float(e.get('price', 0))} for e in data['prices']]
+                          avg_price = sum(d['price'] for d in hourly_list) / len(hourly_list) if hourly_list else 0
+                          all_data.append({
+                              "area": r_name,
+                              "avg_price": round(avg_price, 2),
+                              "hourly_data": hourly_list
                           })
-                      
-                      avg_price = sum(d['price'] for d in hourly_list) / len(hourly_list) if hourly_list else 0
-                      
-                      all_data.append({
-                          "area": r_name,
-                          "daily_avg": round(avg_price, 2),
-                          "hourly_data": hourly_list
-                      })
-                      print(f"API Success: {r_name}")
               except Exception as e:
-                  print(f"API Failed for {r_name}: {e}")
+                  print(f"Failed {r_name}: {e}")
 
-          output = {
-              "last_updated": now.strftime("%Y-%m-%d %H:%M:%S UTC"),
-              "regions": all_data
-          }
-
+          output = {"last_updated": now.strftime("%Y-%m-%d %H:%M:%S UTC"), "regions": all_data}
           with open('data.json', 'w') as f:
               json.dump(output, f, indent=2)
           EOF
