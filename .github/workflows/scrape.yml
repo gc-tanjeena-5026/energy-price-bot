@@ -1,80 +1,65 @@
-name: Live Hourly Energy Scraper
+name: JEPX Raw Data Sync
 on:
   schedule:
-    - cron: "0 * * * *" 
+    - cron: "15 * * * *" # Runs every hour at :15
   workflow_dispatch: 
 
 jobs:
-  scrape-and-update:
+  update-data:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-
-      - name: Install Dependencies
-        run: pip install requests
-
-      - name: Run Brute-Force Scraper
+      - name: Download and Process JEPX Data
         run: |
           python - <<EOF
           import requests
+          import pandas as pd
           import json
-          import datetime
-          import re
+          from datetime import datetime
 
-          regions = ["hokkaido", "tohoku", "tokyo", "chubu", "hokuriku", "kansai", "chugoku", "shikoku", "kyushu"]
-          all_data = []
-          now = datetime.datetime.now()
-
-          for r in regions:
-              try:
-                  url = f"https://kankyo-ichiba.jp/{r}"
-                  res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}, timeout=15)
-                  html = res.text
+          # The official JEPX spot price file for 2026
+          url = "https://www.jepx.jp/market/excel/spot_2026.csv"
+          regions = ["Hokkaido", "Tohoku", "Tokyo", "Chubu", "Hokuriku", "Kansai", "Chugoku", "Shikoku", "Kyushu"]
+          
+          try:
+              # Download the CSV (encoded in Shift-JIS because it's a Japanese file)
+              df = pd.read_csv(url, encoding='shift_jis')
+              
+              # Get the most recent date available in the file
+              latest_date = df.iloc[-1]['年月日']
+              today_data = df[df['年月日'] == latest_date]
+              
+              all_regions = []
+              for region in regions:
+                  # Column names in JEPX are like "エリア値段北海道(円/kWh)"
+                  col_name = f"エリア値段{region}(円/kWh)"
+                  prices = today_data[col_name].astype(float).tolist()
                   
-                  # Search for the average price pattern (e.g., 15.23) near '平均単価'
-                  # This avoids needing to know the exact HTML tag
-                  avg_match = re.search(r'全時間帯の平均単価.*?([\d.]+)', html, re.DOTALL)
-                  avg_price = float(avg_match.group(1)) if avg_match else 0.0
+                  all_regions.append({
+                      "area": region,
+                      "avg_price": round(sum(prices)/len(prices), 2) if prices else 0,
+                      "hourly_data": [{"time": f"{i//2}:{'00' if i%2==0 else '30'}", "price": p} for i, p in enumerate(prices)]
+                  })
 
-                  # Find all prices in the table (usually looks like 12.34円)
-                  prices = re.findall(r'([\d.]+)\s*円/kWh', html)
-                  
-                  hourly_list = []
-                  if prices:
-                      # The first 48 matches are usually the half-hour blocks for the day
-                      for i, p in enumerate(prices[:48]):
-                          hour = i // 2
-                          mins = "00" if i % 2 == 0 else "30"
-                          hourly_list.append({"time": f"{hour}:{mins}", "price": float(p)})
+              output = {
+                  "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                  "date_scraped": str(latest_date),
+                  "regions": all_regions
+              }
+              
+              with open('data.json', 'w') as f:
+                  json.dump(output, f, indent=2)
+              print("Data processing successful")
 
-                  if avg_price > 0 or hourly_list:
-                      all_data.append({
-                          "area": r.capitalize(),
-                          "avg_price": avg_price,
-                          "hourly_data": hourly_list
-                      })
-                      print(f"Brute force success for {r}")
-              except Exception as e:
-                  print(f"Failed {r}: {e}")
-
-          output = {"last_updated": now.strftime("%Y-%m-%d %H:%M:%S UTC"), "regions": all_data}
-          with open('data.json', 'w') as f:
-              json.dump(output, f, indent=2)
+          except Exception as e:
+              print(f"Critical Error: {e}")
           EOF
 
-      - name: Push to Gist
+      - name: Update Gist
         env:
           GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
         run: |
           CONTENT=$(cat data.json | python3 -c "import json,sys; print(json.dumps(sys.stdin.read()))")
           curl -L -X PATCH \
             -H "Authorization: Bearer $GIST_TOKEN" \
-            -H "Content-Type: application/json" \
             "https://api.github.com/gists/959b168e741d4df3e091b8b841365476" \
             -d "{\"files\":{\"hokkaido.json\":{\"content\":$CONTENT}}}"
