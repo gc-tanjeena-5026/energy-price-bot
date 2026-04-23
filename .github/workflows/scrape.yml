@@ -19,38 +19,49 @@ jobs:
       - name: Install Dependencies
         run: pip install requests
 
-      - name: Run API-Direct Scraper
+      - name: Run Brute-Force Scraper
         run: |
           python - <<EOF
           import requests
           import json
           import datetime
+          import re
 
-          region_map = {
-              "1": "Hokkaido", "2": "Tohoku", "3": "Tokyo", "4": "Chubu", 
-              "5": "Hokuriku", "6": "Kansai", "7": "Chugoku", "8": "Shikoku", "9": "Kyushu"
-          }
-          
+          regions = ["hokkaido", "tohoku", "tokyo", "chubu", "hokuriku", "kansai", "chugoku", "shikoku", "kyushu"]
           all_data = []
           now = datetime.datetime.now()
-          date_str = now.strftime("%Y-%m-%d")
 
-          for r_id, r_name in region_map.items():
+          for r in regions:
               try:
-                  api_url = f"https://kankyo-ichiba.jp/api/get-area-price?area={r_id}&date={date_str}"
-                  res = requests.get(api_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
-                  if res.status_code == 200:
-                      data = res.json()
-                      if data and 'prices' in data:
-                          hourly_list = [{"time": e.get('time'), "price": float(e.get('price', 0))} for e in data['prices']]
-                          avg_price = sum(d['price'] for d in hourly_list) / len(hourly_list) if hourly_list else 0
-                          all_data.append({
-                              "area": r_name,
-                              "avg_price": round(avg_price, 2),
-                              "hourly_data": hourly_list
-                          })
+                  url = f"https://kankyo-ichiba.jp/{r}"
+                  res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}, timeout=15)
+                  html = res.text
+                  
+                  # Search for the average price pattern (e.g., 15.23) near '平均単価'
+                  # This avoids needing to know the exact HTML tag
+                  avg_match = re.search(r'全時間帯の平均単価.*?([\d.]+)', html, re.DOTALL)
+                  avg_price = float(avg_match.group(1)) if avg_match else 0.0
+
+                  # Find all prices in the table (usually looks like 12.34円)
+                  prices = re.findall(r'([\d.]+)\s*円/kWh', html)
+                  
+                  hourly_list = []
+                  if prices:
+                      # The first 48 matches are usually the half-hour blocks for the day
+                      for i, p in enumerate(prices[:48]):
+                          hour = i // 2
+                          mins = "00" if i % 2 == 0 else "30"
+                          hourly_list.append({"time": f"{hour}:{mins}", "price": float(p)})
+
+                  if avg_price > 0 or hourly_list:
+                      all_data.append({
+                          "area": r.capitalize(),
+                          "avg_price": avg_price,
+                          "hourly_data": hourly_list
+                      })
+                      print(f"Brute force success for {r}")
               except Exception as e:
-                  print(f"Failed {r_name}: {e}")
+                  print(f"Failed {r}: {e}")
 
           output = {"last_updated": now.strftime("%Y-%m-%d %H:%M:%S UTC"), "regions": all_data}
           with open('data.json', 'w') as f:
