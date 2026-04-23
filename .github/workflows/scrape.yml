@@ -1,14 +1,22 @@
 name: JEPX Raw Data Sync
 on:
   schedule:
-    - cron: "15 * * * *" # Runs every hour at :15
+    - cron: "15 * * * *" 
   workflow_dispatch: 
 
 jobs:
   update-data:
     runs-on: ubuntu-latest
     steps:
-      - name: Download and Process JEPX Data
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: pip install requests pandas
+
+      - name: Run JEPX Processor
         run: |
           python - <<EOF
           import requests
@@ -16,42 +24,49 @@ jobs:
           import json
           from datetime import datetime
 
-          # The official JEPX spot price file for 2026
           url = "https://www.jepx.jp/market/excel/spot_2026.csv"
-          regions = ["Hokkaido", "Tohoku", "Tokyo", "Chubu", "Hokuriku", "Kansai", "Chugoku", "Shikoku", "Kyushu"]
+          # These are the exact order of regions in the JEPX CSV file
+          region_order = ["System", "Hokkaido", "Tohoku", "Tokyo", "Chubu", "Hokuriku", "Kansai", "Chugoku", "Shikoku", "Kyushu"]
           
           try:
-              # Download the CSV (encoded in Shift-JIS because it's a Japanese file)
+              # Download using Shift-JIS encoding for Japanese characters
               df = pd.read_csv(url, encoding='shift_jis')
               
-              # Get the most recent date available in the file
-              latest_date = df.iloc[-1]['年月日']
-              today_data = df[df['年月日'] == latest_date]
+              # Get the last 48 rows (the 48 half-hour blocks for the most recent day)
+              latest_date = df.iloc[-1].iloc[0] 
+              today_df = df[df.iloc[:, 0] == latest_date]
               
               all_regions = []
-              for region in regions:
-                  # Column names in JEPX are like "エリア値段北海道(円/kWh)"
-                  col_name = f"エリア値段{region}(円/kWh)"
-                  prices = today_data[col_name].astype(float).tolist()
+              # The price data usually starts at column index 4
+              for i, region in enumerate(region_order):
+                  col_index = i + 4 
+                  prices = today_df.iloc[:, col_index].astype(float).tolist()
                   
+                  hourly_data = []
+                  for idx, p in enumerate(prices):
+                      # Convert 48 half-hour slots to time strings (e.g., 00:00, 00:30...)
+                      hour = idx // 2
+                      minute = "00" if idx % 2 == 0 else "30"
+                      hourly_data.append({"time": f"{hour:02}:{minute}", "price": p})
+
                   all_regions.append({
                       "area": region,
                       "avg_price": round(sum(prices)/len(prices), 2) if prices else 0,
-                      "hourly_data": [{"time": f"{i//2}:{'00' if i%2==0 else '30'}", "price": p} for i, p in enumerate(prices)]
+                      "hourly_data": hourly_data
                   })
 
               output = {
                   "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                  "date_scraped": str(latest_date),
+                  "target_date": str(latest_date),
                   "regions": all_regions
               }
               
               with open('data.json', 'w') as f:
                   json.dump(output, f, indent=2)
-              print("Data processing successful")
+              print(f"Successfully processed {len(all_regions)} regions.")
 
           except Exception as e:
-              print(f"Critical Error: {e}")
+              print(f"Error: {e}")
           EOF
 
       - name: Update Gist
@@ -61,5 +76,6 @@ jobs:
           CONTENT=$(cat data.json | python3 -c "import json,sys; print(json.dumps(sys.stdin.read()))")
           curl -L -X PATCH \
             -H "Authorization: Bearer $GIST_TOKEN" \
+            -H "Content-Type: application/json" \
             "https://api.github.com/gists/959b168e741d4df3e091b8b841365476" \
             -d "{\"files\":{\"hokkaido.json\":{\"content\":$CONTENT}}}"
