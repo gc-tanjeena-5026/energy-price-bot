@@ -30,63 +30,53 @@ jobs:
 
           regions = ["hokkaido", "tohoku", "tokyo", "chubu", "hokuriku", "kansai", "chugoku", "shikoku", "kyushu"]
           all_data = []
-
-          # Advanced headers to look like a real human browsing
-          headers = {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-              'Accept-Language': 'ja,en-US;q=0.7,en;q=0.3',
-          }
+          headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
 
           for r in regions:
               try:
                   url = f"https://kankyo-ichiba.jp/{r}"
-                  session = requests.Session()
-                  res = session.get(url, headers=headers, timeout=20)
+                  res = requests.get(url, headers=headers, timeout=15)
                   soup = BeautifulSoup(res.text, 'html.parser')
                   
-                  # 1. Smarter Daily Average Search
-                  # We search for any text containing "平均単価" and get the number after it
+                  # 1. Improved Average Price Search
                   avg_val = 0.0
-                  text_content = soup.get_text()
-                  match = re.search(r'全時間帯の平均単価\s*([\d.]+)', text_content)
-                  if match:
-                      avg_val = float(match.group(1))
+                  # Look for the specific 'total-average' dl or any text with '平均単価'
+                  avg_tag = soup.find(['dl', 'div'], class_=re.compile(r'average|price', re.I))
+                  if avg_tag:
+                      numbers = re.findall(r'\d+\.\d+|\d+', avg_tag.text)
+                      if numbers: avg_val = float(numbers[0])
 
-                  # 2. Hourly Table Search
-                  # The table usually has a class like 'area-price-table' or 'price-table'
+                  # 2. Universal Table Search
                   hourly_list = []
-                  table = soup.find('table', class_=re.compile(r'.*price.*table.*'))
-                  if table:
+                  # Find all tables and look for ones that contain time-like patterns (00:00 or 0時)
+                  tables = soup.find_all('table')
+                  for table in tables:
                       rows = table.find_all('tr')
                       for row in rows:
                           cols = row.find_all(['td', 'th'])
                           if len(cols) >= 2:
-                              time_text = cols[0].get_text(strip=True)
-                              # Clean up text like "00:00 - 00:30" or "0時"
-                              if any(char.isdigit() for char in time_text):
-                                  price_raw = cols[1].get_text(strip=True).replace('円', '').replace(',', '')
+                              text = cols[0].text.strip()
+                              # If the row looks like a time (contains numbers or '時')
+                              if re.search(r'\d', text):
+                                  price_text = cols[1].text.strip().replace('円', '').replace(',', '')
                                   try:
-                                      hourly_list.append({"time": time_text, "price": float(price_raw)})
+                                      price_val = float(re.findall(r'\d+\.\d+|\d+', price_text)[0])
+                                      hourly_list.append({"time": text, "price": price_val})
                                   except:
                                       continue
                   
-                  if avg_val > 0 or len(hourly_list) > 0:
+                  if hourly_list:
                       all_data.append({
                           "area": r.capitalize(),
-                          "daily_avg": avg_val,
+                          "daily_avg": avg_val if avg_val > 0 else (sum(d['price'] for d in hourly_list)/len(hourly_list)),
                           "hourly_data": hourly_list
                       })
-                      print(f"Success: Found data for {r}")
-                  else:
-                      print(f"Warning: Page loaded for {r} but no data found in tags.")
-
+                      print(f"Captured {r}")
               except Exception as e:
-                  print(f"Critical Error on {r}: {str(e)}")
+                  print(f"Error on {r}: {e}")
               
           output = {
               "last_updated": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC"),
-              "data_source": "Kankyo-Ichiba Actual",
               "regions": all_data
           }
 
