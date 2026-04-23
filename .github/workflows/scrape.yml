@@ -16,67 +16,52 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install Scraper Tools
-        run: pip install requests beautifulsoup4
-
-      - name: Run Hourly Scraper
+      - name: Run API-Direct Scraper
         run: |
           python - <<EOF
           import requests
-          from bs4 import BeautifulSoup
           import json
           import datetime
-          import re
 
-          regions = ["hokkaido", "tohoku", "tokyo", "chubu", "hokuriku", "kansai", "chugoku", "shikoku", "kyushu"]
+          # Mapping regional IDs used by the website's internal data source
+          # 1: Hokkaido, 2: Tohoku, 3: Tokyo, 4: Chubu, 5: Hokuriku, 6: Kansai, 7: Chugoku, 8: Shikoku, 9: Kyushu
+          region_map = {
+              "1": "Hokkaido", "2": "Tohoku", "3": "Tokyo", "4": "Chubu", 
+              "5": "Hokuriku", "6": "Kansai", "7": "Chugoku", "8": "Shikoku", "9": "Kyushu"
+          }
+          
           all_data = []
-          headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+          now = datetime.datetime.now()
+          date_str = now.strftime("%Y-%m-%d")
 
-          for r in regions:
+          for r_id, r_name in region_map.items():
               try:
-                  url = f"https://kankyo-ichiba.jp/{r}"
-                  res = requests.get(url, headers=headers, timeout=15)
-                  soup = BeautifulSoup(res.text, 'html.parser')
+                  # Targeting the internal data endpoint directly
+                  api_url = f"https://kankyo-ichiba.jp/api/get-area-price?area={r_id}&date={date_str}"
+                  res = requests.get(api_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
+                  data = res.json()
                   
-                  # 1. Improved Average Price Search
-                  avg_val = 0.0
-                  # Look for the specific 'total-average' dl or any text with '平均単価'
-                  avg_tag = soup.find(['dl', 'div'], class_=re.compile(r'average|price', re.I))
-                  if avg_tag:
-                      numbers = re.findall(r'\d+\.\d+|\d+', avg_tag.text)
-                      if numbers: avg_val = float(numbers[0])
-
-                  # 2. Universal Table Search
-                  hourly_list = []
-                  # Find all tables and look for ones that contain time-like patterns (00:00 or 0時)
-                  tables = soup.find_all('table')
-                  for table in tables:
-                      rows = table.find_all('tr')
-                      for row in rows:
-                          cols = row.find_all(['td', 'th'])
-                          if len(cols) >= 2:
-                              text = cols[0].text.strip()
-                              # If the row looks like a time (contains numbers or '時')
-                              if re.search(r'\d', text):
-                                  price_text = cols[1].text.strip().replace('円', '').replace(',', '')
-                                  try:
-                                      price_val = float(re.findall(r'\d+\.\d+|\d+', price_text)[0])
-                                      hourly_list.append({"time": text, "price": price_val})
-                                  except:
-                                      continue
-                  
-                  if hourly_list:
+                  if data and 'prices' in data:
+                      hourly_list = []
+                      for entry in data['prices']:
+                          hourly_list.append({
+                              "time": entry.get('time'),
+                              "price": float(entry.get('price', 0))
+                          })
+                      
+                      avg_price = sum(d['price'] for d in hourly_list) / len(hourly_list) if hourly_list else 0
+                      
                       all_data.append({
-                          "area": r.capitalize(),
-                          "daily_avg": avg_val if avg_val > 0 else (sum(d['price'] for d in hourly_list)/len(hourly_list)),
+                          "area": r_name,
+                          "daily_avg": round(avg_price, 2),
                           "hourly_data": hourly_list
                       })
-                      print(f"Captured {r}")
+                      print(f"API Success: {r_name}")
               except Exception as e:
-                  print(f"Error on {r}: {e}")
-              
+                  print(f"API Failed for {r_name}: {e}")
+
           output = {
-              "last_updated": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC"),
+              "last_updated": now.strftime("%Y-%m-%d %H:%M:%S UTC"),
               "regions": all_data
           }
 
