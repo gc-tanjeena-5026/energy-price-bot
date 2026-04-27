@@ -1,7 +1,7 @@
 name: Maira Time-Series API Sync
 on:
   schedule:
-    - cron: "20 * * * *" # Runs at 20 minutes past the hour
+    - cron: "20 * * * *" # Runs every hour at 20 minutes past
   workflow_dispatch: 
 
 jobs:
@@ -16,7 +16,7 @@ jobs:
       - name: Install Dependencies
         run: pip install requests pandas
 
-      - name: Fetch and Push Data
+      - name: Fetch JEPX and Push to Maira
         env:
           MAIRA_API_KEY: ${{ secrets.MAIRA_API_KEY }}
           MAIRA_DATASET_ID: ${{ secrets.MAIRA_DATASET_ID }}
@@ -27,45 +27,54 @@ jobs:
           import io
           import os
 
-          # 1. DOWNLOAD JEPX RAW DATA
+          # 1. DOWNLOAD JEPX RAW DATA (Latest Spot Prices)
           url = "https://www.jepx.jp/market/excel/spot_2026.csv"
-          df = pd.read_csv(url, encoding='shift_jis')
+          try:
+              df = pd.read_csv(url, encoding='shift_jis')
+          except Exception as e:
+              print(f"Download failed: {e}")
+              exit(1)
           
-          # 2. FORMAT FOR TIME-SERIES
-          # We take the last 48 records (latest 24 hours)
+          # 2. FORMAT DATA FOR YOUR TIME-SERIES SCHEMA
+          # We take the last 48 records (latest 24 hours of 30-min slots)
           latest_data = df.tail(48).copy()
           
           def get_iso_time(row):
+              # Converts JEPX date/slot to ISO-8601 (e.g., 2026-04-27T10:00:00Z)
               date_part = row.iloc[0].replace('/', '-')
               slot = int(row.iloc[1])
               h = (slot - 1) // 2
               m = "00" if slot % 2 != 0 else "30"
               return f"{date_part}T{h:02}:{m}:00Z"
 
+          # Creating the 'timestamp' column you registered in your JSON
           latest_data['timestamp'] = latest_data.apply(get_iso_time, axis=1)
           
-          # 3. SELECT REGIONS (Example: Tokyo is col index 11, Kansai is 14)
-          # Ensure column names match what you set in Maira's Dataset schema
+          # 3. PREPARE THE CSV (Matching your datetime_fields)
+          # We include an 'idx' column as requested in your registration schema
           final_df = pd.DataFrame({
+              "idx": range(len(latest_data)),
               "timestamp": latest_data['timestamp'],
-              "tokyo": latest_data.iloc[:, 11].astype(float),
-              "kansai": latest_data.iloc[:, 14].astype(float)
+              "tokyo_price": latest_data.iloc[:, 11].astype(float),
+              "kansai_price": latest_data.iloc[:, 14].astype(float),
+              "hokkaido_price": latest_data.iloc[:, 4].astype(float)
           })
 
-          # 4. CONVERT TO CSV BUFFER
+          # 4. CONVERT TO CSV STRING
           csv_buffer = io.StringIO()
           final_df.to_csv(csv_buffer, index=False)
           
-          # 5. API CALL TO MAIRA
+          # 5. HIT MAIRA API ENDPOINT
           dataset_id = os.environ['MAIRA_DATASET_ID']
           api_url = f"https://api.recommender.gigalogy.com/v1/gpt/datasets_ts/{dataset_id}/file"
           headers = {"Authorization": f"Bearer {os.environ['MAIRA_API_KEY']}"}
           
-          files = {'file': ('energy_data.csv', csv_buffer.getvalue())}
+          # We send the CSV as a 'file' part in a PUT request
+          files = {'file': ('energy_update.csv', csv_buffer.getvalue())}
           response = requests.put(api_url, headers=headers, files=files)
           
           if response.status_code == 200:
-              print("Successfully pushed to Maira Time-Series API!")
+              print(f"Successfully synced {len(final_df)} time-series rows to Maira!")
           else:
-              print(f"Error {response.status_code}: {response.text}")
+              print(f"API Error {response.status_code}: {response.text}")
           EOF
